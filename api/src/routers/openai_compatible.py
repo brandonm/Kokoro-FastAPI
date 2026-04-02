@@ -558,6 +558,32 @@ async def list_voices():
         )
 
 
+@router.post("/warmup")
+async def warmup():
+    """Ensure the TTS worker subprocess is running.
+
+    Call this before you need audio to hide cold-start latency.
+    Returns immediately if the worker is already up.
+    """
+    try:
+        from ..inference.model_manager import get_manager
+
+        manager = await get_manager()
+        async with manager._lock:
+            await manager._ensure_worker()
+        return {"status": "ready"}
+    except Exception as e:
+        logger.error(f"Warmup failed: {str(e)}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "warmup_failed",
+                "message": str(e),
+                "type": "server_error",
+            },
+        )
+
+
 @router.post("/audio/voices/combine")
 async def combine_voices(request: Union[str, List[str]]):
     """Combine multiple voices into a new voice and return the .pt file.
