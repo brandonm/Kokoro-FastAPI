@@ -25,6 +25,9 @@ class Settings(BaseSettings):
         False  # Whether to allow saving combined voices locally
     )
 
+    # Model lifecycle
+    model_ttl: int = 300  # Seconds of idle before unloading model from GPU. -1 = never unload, 0 = unload immediately after each request
+
     # Container absolute paths
     model_dir: str = "/app/api/src/models"  # Absolute path in container
     voices_dir: str = "/app/api/src/voices/v1_0"  # Absolute path in container

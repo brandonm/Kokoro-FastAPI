@@ -1,5 +1,6 @@
-"""Kokoro V1 model management."""
+"""Kokoro V1 model management with idle TTL support."""
 
+import asyncio
 from typing import Optional
 
 from loguru import logger
@@ -26,6 +27,9 @@ class ModelManager:
         self._config = config or model_config
         self._backend: Optional[KokoroV1] = None  # Explicitly type as KokoroV1
         self._device: Optional[str] = None
+        self._ttl_task: Optional[asyncio.Task] = None
+        self._lock = asyncio.Lock()
+        self._active_requests = 0
 
     def _determine_device(self) -> str:
         """Determine device based on settings."""
@@ -70,18 +74,22 @@ class ModelManager:
                 voices = await paths.list_voices()
                 voice_path = await paths.get_voice_path(settings.default_voice)
 
-                # Warm up with short text
+                # Warm up with short text — call backend directly to avoid
+                # starting the TTL timer prematurely during warmup
                 warmup_text = "Warmup text for initialization."
-                # Use default voice name for warmup
                 voice_name = settings.default_voice
                 logger.debug(f"Using default voice '{voice_name}' for warmup")
-                async for _ in self.generate(warmup_text, (voice_name, voice_path)):
+                async for _ in self._backend.generate(
+                    warmup_text, (voice_name, voice_path)
+                ):
                     pass
             except Exception as e:
                 raise RuntimeError(f"Failed to get default voice: {e}")
 
             ms = int((time.perf_counter() - start) * 1000)
             logger.info(f"Warmup completed in {ms}ms")
+
+            self._reset_ttl_timer()
 
             return self._device, "kokoro_v1", len(voices)
         except FileNotFoundError as e:
@@ -130,14 +138,37 @@ Model files not found! You need to download the Kokoro V1 model:
         except Exception as e:
             raise RuntimeError(f"Failed to load model: {e}")
 
+    async def _ensure_loaded(self) -> None:
+        """Reload model if it was unloaded due to TTL."""
+        if self._backend and self._backend.is_loaded:
+            return
+
+        logger.info("Model was unloaded, reloading...")
+        import time
+        start = time.perf_counter()
+
+        if not self._backend:
+            await self.initialize()
+
+        model_path = self._config.pytorch_kokoro_v1_file
+        await self.load_model(model_path)
+
+        ms = int((time.perf_counter() - start) * 1000)
+        logger.info(f"Model reloaded in {ms}ms")
+
     async def generate(self, *args, **kwargs):
         """Generate audio using initialized backend.
 
         Raises:
             RuntimeError: If generation fails
         """
-        if not self._backend:
-            raise RuntimeError("Backend not initialized")
+        async with self._lock:
+            await self._ensure_loaded()
+            self._active_requests += 1
+            # Cancel any pending unload while requests are active
+            if self._ttl_task and not self._ttl_task.done():
+                self._ttl_task.cancel()
+                self._ttl_task = None
 
         try:
             async for chunk in self._backend.generate(*args, **kwargs):
@@ -146,9 +177,49 @@ Model files not found! You need to download the Kokoro V1 model:
                 yield chunk
         except Exception as e:
             raise RuntimeError(f"Generation failed: {e}")
+        finally:
+            async with self._lock:
+                self._active_requests -= 1
+                if self._active_requests == 0:
+                    if settings.model_ttl == 0:
+                        await self._do_unload()
+                    else:
+                        self._reset_ttl_timer()
+
+    def _reset_ttl_timer(self) -> None:
+        """Reset the idle TTL timer. -1 = never unload."""
+        if self._ttl_task and not self._ttl_task.done():
+            self._ttl_task.cancel()
+            self._ttl_task = None
+
+        if settings.model_ttl <= 0:
+            return
+
+        self._ttl_task = asyncio.create_task(self._ttl_countdown())
+
+    async def _ttl_countdown(self) -> None:
+        """Wait for TTL seconds, then unload the model."""
+        try:
+            await asyncio.sleep(settings.model_ttl)
+            async with self._lock:
+                if self._active_requests == 0:
+                    logger.info(
+                        f"Model idle for {settings.model_ttl}s, unloading from GPU..."
+                    )
+                    await self._do_unload()
+        except asyncio.CancelledError:
+            pass
+
+    async def _do_unload(self) -> None:
+        """Unload model and free GPU memory in a thread to avoid blocking the event loop."""
+        if self._backend and self._backend.is_loaded:
+            await asyncio.to_thread(self._backend.unload)
+            logger.info("Model unloaded, GPU memory freed")
 
     def unload_all(self) -> None:
         """Unload model and free resources."""
+        if self._ttl_task and not self._ttl_task.done():
+            self._ttl_task.cancel()
         if self._backend:
             self._backend.unload()
             self._backend = None
