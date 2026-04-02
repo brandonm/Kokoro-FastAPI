@@ -349,12 +349,14 @@ class KokoroV1(BaseModelBackend):
 
     def unload(self) -> None:
         """Unload model and free resources."""
-        if self._model is not None:
-            del self._model
-            self._model = None
-        for pipeline in self._pipelines.values():
-            del pipeline
+        import gc
+
+        # Clear pipelines first — they hold references to self._model
         self._pipelines.clear()
+        if self._model is not None:
+            self._model = None
+        # Force GC to break circular refs before releasing CUDA memory
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
