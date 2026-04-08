@@ -571,6 +571,7 @@ async def warmup():
         manager = await get_manager()
         async with manager._lock:
             await manager._ensure_worker()
+            manager._reset_ttl_timer()
         return {"status": "ready"}
     except Exception as e:
         logger.error(f"Warmup failed: {str(e)}")
