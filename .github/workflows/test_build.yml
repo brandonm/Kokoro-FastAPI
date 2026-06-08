@@ -15,6 +15,7 @@ on:
           - all
           - cpu
           - gpu
+          - gpu-cu128
           - rocm
       platform:
         description: 'Platform (ignored for rocm)'
@@ -36,7 +37,7 @@ concurrency:
 
 jobs:
   setup:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -44,11 +45,12 @@ jobs:
         id: set-matrix
         run: |
           ALL_TARGETS='[
-            {"build_target":"cpu","platform":"amd64","runs_on":"ubuntu-latest"},
+            {"build_target":"cpu","platform":"amd64","runs_on":"ubuntu-24.04"},
             {"build_target":"cpu","platform":"arm64","runs_on":"ubuntu-24.04-arm"},
-            {"build_target":"gpu","platform":"amd64","runs_on":"ubuntu-latest"},
+            {"build_target":"gpu","platform":"amd64","runs_on":"ubuntu-24.04"},
             {"build_target":"gpu","platform":"arm64","runs_on":"ubuntu-24.04-arm"},
-            {"build_target":"rocm","platform":"amd64","runs_on":"ubuntu-latest"}
+            {"build_target":"gpu-cu128","platform":"amd64","runs_on":"ubuntu-24.04"},
+            {"build_target":"rocm","platform":"amd64","runs_on":"ubuntu-24.04"}
           ]'
           
           FILTERED=$(echo "$ALL_TARGETS" | jq -c \
@@ -77,7 +79,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ inputs.branch_name }}
 
@@ -86,15 +88,19 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
         with:
           driver-opts: image=moby/buildkit:v0.21.1
 
       - name: Build image
         run: |
           TARGET="${{ matrix.build_target }}-${{ matrix.platform }}"
+          CACHE_ARGS=(
+            --set "*.cache-from=type=gha,scope=${TARGET}"
+            --set "*.cache-to=type=gha,mode=max,scope=${TARGET}"
+          )
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            docker buildx bake "$TARGET" --print
+            docker buildx bake "$TARGET" --print "${CACHE_ARGS[@]}"
           else
-            docker buildx bake "$TARGET" --progress=plain
+            docker buildx bake "$TARGET" --progress=plain "${CACHE_ARGS[@]}"
           fi

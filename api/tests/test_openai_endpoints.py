@@ -78,13 +78,12 @@ def test_list_models(mock_openai_mappings):
     data = response.json()
     assert data["object"] == "list"
     assert isinstance(data["data"], list)
-    assert len(data["data"]) == 3  # tts-1, tts-1-hd, and kokoro
-
     # Verify all expected models are present
     model_ids = [model["id"] for model in data["data"]]
     assert "tts-1" in model_ids
     assert "tts-1-hd" in model_ids
     assert "kokoro" in model_ids
+    assert "gpt-4o-mini-tts" in model_ids
 
     # Verify model format
     for model in data["data"]:
@@ -403,8 +402,12 @@ def test_list_voices(mock_tts_service):
     data = response.json()
     assert "voices" in data
     assert len(data["voices"]) == 2
-    assert "voice1" in data["voices"]
-    assert "voice2" in data["voices"]
+    assert {"id": "voice1", "name": "voice1"} in data["voices"]
+    assert {"id": "voice2", "name": "voice2"} in data["voices"]
+
+    legacy = client.get("/v1/audio/voices?legacy=true")
+    assert legacy.status_code == 200
+    assert legacy.json()["voices"] == ["voice1", "voice2"]
 
 
 @patch("api.src.routers.openai_compatible.settings")

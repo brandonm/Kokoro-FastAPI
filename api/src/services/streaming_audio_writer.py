@@ -34,16 +34,16 @@ class StreamingAudioWriter:
                 self.output_buffer = BytesIO()
                 container_options = {}
                 # Try disabling Xing VBR header for MP3 to fix iOS timeline reading issues
-                if self.format == 'mp3':
+                if self.format == "mp3":
                     # Disable Xing VBR header
-                    container_options = {'write_xing': '0'}
+                    container_options = {"write_xing": "0"}
                     logger.debug("Disabling Xing VBR header for MP3 encoding.")
 
                 self.container = av.open(
                     self.output_buffer,
                     mode="w",
                     format=self.format if self.format != "aac" else "adts",
-                    options=container_options # Pass options here
+                    options=container_options,  # Pass options here
                 )
                 self.stream = self.container.add_stream(
                     codec_map[self.format],
@@ -51,10 +51,12 @@ class StreamingAudioWriter:
                     layout="mono" if self.channels == 1 else "stereo",
                 )
                 # Set bit_rate only for codecs where it's applicable and useful
-                if self.format in ['mp3', 'aac', 'opus']:
+                if self.format in ["mp3", "aac", "opus"]:
                     self.stream.bit_rate = 128000
         else:
-            raise ValueError(f"Unsupported format: {self.format}") # Use self.format here
+            raise ValueError(
+                f"Unsupported format: {self.format}"
+            )  # Use self.format here
 
     def close(self):
         if hasattr(self, "container"):
@@ -80,13 +82,21 @@ class StreamingAudioWriter:
                 for packet in packets:
                     self.container.mux(packet)
 
-                # Closing the container handles writing the trailer and finalizing the file.
-                # No explicit flush method is available or needed here.
-                logger.debug("Muxed final packets.")
+                # Close the container FIRST. this writes the final OGG page
+                # (or other format trailer) to the output buffer. For OGG/Opus,
+                # the last page of audio data is only written during close().
+                self.container.close()
+                logger.debug("Closed container, final page/trailer written.")
 
-                # Get the final bytes from the buffer *before* closing it
+                # Now read the buffer which includes all trailing data
                 data = self.output_buffer.getvalue()
-                self.close() # Close container and buffer
+                self.output_buffer.close()
+
+                if self.format == "wav":
+                    # close()'s seek-and-patch lands ~78 bytes of size-field
+                    # junk in the truncated buffer. Decoded as samples it's
+                    # an audible click at chunk end. issue #463.
+                    return b""
                 return data
 
         if audio_data is None or len(audio_data) == 0:

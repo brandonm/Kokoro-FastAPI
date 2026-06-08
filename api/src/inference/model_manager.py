@@ -192,6 +192,27 @@ class ModelManager:
         """No-op — model loading happens inside the worker subprocess."""
         pass
 
+    async def ensure_backend(self) -> None:
+        """Spawn worker if needed. Idempotent; safe under concurrent callers."""
+        if self._worker_alive():
+            return
+        async with self._lock:
+            await self._ensure_worker()
+
+    async def unload(self) -> None:
+        """Release model from GPU memory by killing the worker subprocess.
+
+        Fully releases the CUDA context (~2.4 GB on Kokoro), not just the
+        allocator pool. Worker respawns lazily on the next generate() call.
+        """
+        async with self._lock:
+            if self._ttl_task and not self._ttl_task.done():
+                self._ttl_task.cancel()
+                self._ttl_task = None
+            if self._worker_alive():
+                await self._kill_worker()
+        logger.info("Model unloaded — GPU memory fully released")
+
     # ── Generation ─────────────────────────────────────────────────────
 
     async def _generate_via_worker(

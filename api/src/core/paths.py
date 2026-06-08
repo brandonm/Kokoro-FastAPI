@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
 
@@ -160,7 +161,7 @@ async def list_voices() -> List[str]:
 
 
 async def load_voice_tensor(
-    voice_path: str, device: str = "cpu", weights_only=False
+    voice_path: str, device: str = "cpu", weights_only=True
 ) -> torch.Tensor:
     """Load voice tensor from file.
 
@@ -329,6 +330,16 @@ async def get_content_type(path: str) -> str:
         ".gif": "image/gif",
         ".svg": "image/svg+xml",
         ".ico": "image/x-icon",
+        # audio downloads: serve a real media type so the webui can play the file
+        # directly (the player swaps to this URL once generation finishes, #150).
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".opus": "audio/opus",
+        ".flac": "audio/flac",
+        ".aac": "audio/aac",
+        ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".pcm": "audio/pcm",
     }.get(ext, "application/octet-stream")
 
 
@@ -344,12 +355,13 @@ async def cleanup_temp_files() -> None:
             await aiofiles.os.makedirs(settings.temp_file_dir, exist_ok=True)
             return
 
+        now = time.time()
+        max_age = settings.max_temp_dir_age_hours * 3600
         entries = await aiofiles.os.scandir(settings.temp_file_dir)
         for entry in entries:
             if entry.is_file():
                 stat = await aiofiles.os.stat(entry.path)
-                max_age = stat.st_mtime + (settings.max_temp_dir_age_hours * 3600)
-                if max_age < stat.st_mtime:
+                if now - stat.st_mtime > max_age:
                     try:
                         await aiofiles.os.remove(entry.path)
                         logger.info(f"Cleaned up old temp file: {entry.name}")

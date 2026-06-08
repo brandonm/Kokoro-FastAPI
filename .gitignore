@@ -23,6 +23,7 @@ build/
 # Environment
 # .env
 .venv/
+node_modules/
 env/
 venv/
 ENV/
@@ -42,6 +43,8 @@ ENV/
 
 # Other project files
 .env
+.claude/*
+.agents/*
 Kokoro-82M/
 ui/data/
 EXTERNAL_UV_DOCUMENTATION*
@@ -49,8 +52,7 @@ app
 api/temp_files/
 
 # Docker
-Dockerfile*
-docker-compose*
+# Dockerfile*
 examples/ebook_test/chapter_to_audio.py
 examples/ebook_test/chapters_to_audio.py
 examples/ebook_test/parse_epub.py
@@ -69,7 +71,26 @@ examples/*.ogg
 examples/speech.mp3
 examples/phoneme_examples/output/*.wav
 examples/assorted_checks/benchmarks/output_audio/*
+examples/assorted_checks/test_transcription/output/*.wav
+examples/assorted_checks/test_transcription/output_long_form/*.log
+examples/assorted_checks/test_transcription/output_long_form/*.transcript.txt
+examples/assorted_checks/test_transcription/output_long_form/*.wav
+examples/assorted_checks/test_transcription/output_long_form/*.synth_meta.json
+examples/assorted_checks/test_transcription/output_multilingual/*.wav
+examples/assorted_checks/benchmarks/output_data/model_unload_stats.txt
+examples/assorted_checks/benchmarks/output_data/model_unload_results.json
+examples/assorted_checks/benchmarks/output_plots/model_unload_longform.png
+examples/assorted_checks/benchmarks/output_plots/model_unload_short.png
 uv.lock
+!docker/test-client/uv.lock
 
 # Mac MPS virtualenv for dual testing
 .venv-mps
+examples/assorted_checks/test_transcription/*/*.wav
+pyproject.toml.bkp
+
+# Local scratch notes, scan outputs, anything not meant to ship
+.local/
+examples/assorted_checks/test_silence/out/*
+playwright-report/
+test-results/

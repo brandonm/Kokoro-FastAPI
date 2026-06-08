@@ -361,3 +361,71 @@ async def test_unload_all_cleans_up(manager):
 
     assert manager._conn is None
     assert manager._process is None
+
+
+# ── Manual unload + ensure_backend shims ───────────────────────────────
+
+@pytest.mark.asyncio
+@patch("api.src.inference.model_manager.settings")
+async def test_unload_kills_worker(mock_settings, manager):
+    """unload() should terminate the worker subprocess to fully release VRAM."""
+    mock_settings.model_ttl = -1
+    mock_settings.default_volume_multiplier = 1.0
+    mock_settings.get_device.return_value = "cuda"
+
+    await manager._spawn_worker()
+    assert manager._conn is not None
+
+    await manager.unload()
+
+    assert manager._conn is None
+    assert manager._process is None
+
+
+@pytest.mark.asyncio
+@patch("api.src.inference.model_manager.settings")
+async def test_unload_cancels_pending_ttl_task(mock_settings, manager):
+    """unload() called mid-TTL should cancel the pending timer."""
+    mock_settings.model_ttl = 60
+    mock_settings.default_volume_multiplier = 1.0
+    mock_settings.get_device.return_value = "cuda"
+
+    await manager._spawn_worker()
+    await _generate_one(manager)
+    assert manager._ttl_task is not None and not manager._ttl_task.done()
+
+    await manager.unload()
+
+    assert manager._ttl_task is None or manager._ttl_task.done()
+    assert manager._conn is None
+
+
+@pytest.mark.asyncio
+@patch("api.src.inference.model_manager.settings")
+async def test_ensure_backend_spawns_when_dead(mock_settings, manager):
+    """ensure_backend() should spawn a worker if none is alive."""
+    mock_settings.model_ttl = -1
+    mock_settings.default_volume_multiplier = 1.0
+    mock_settings.get_device.return_value = "cuda"
+
+    assert manager._conn is None
+    await manager.ensure_backend()
+    assert manager._conn is not None
+
+
+@pytest.mark.asyncio
+@patch("api.src.inference.model_manager.settings")
+async def test_ensure_backend_noop_when_alive(mock_settings, manager):
+    """ensure_backend() should not respawn if the worker is already alive."""
+    mock_settings.model_ttl = -1
+    mock_settings.default_volume_multiplier = 1.0
+    mock_settings.get_device.return_value = "cuda"
+
+    await manager._spawn_worker()
+    original_conn = manager._conn
+    original_process = manager._process
+
+    await manager.ensure_backend()
+
+    assert manager._conn is original_conn
+    assert manager._process is original_process

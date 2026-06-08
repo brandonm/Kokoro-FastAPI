@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +20,7 @@ async def test_find_file_exists():
     with patch("aiofiles.os.path.exists") as mock_exists:
         mock_exists.return_value = True
         path = await _find_file("test.txt", ["/test/path"])
-        assert path == "/test/path/test.txt"
+        assert Path(path) == Path("/test/path/test.txt")
 
 
 @pytest.mark.asyncio
@@ -38,7 +39,7 @@ async def test_find_file_with_filter():
         mock_exists.return_value = True
         filter_fn = lambda p: p.endswith(".txt")
         path = await _find_file("test.txt", ["/test/path"], filter_fn)
-        assert path == "/test/path/test.txt"
+        assert Path(path) == Path("/test/path/test.txt")
 
 
 @pytest.mark.asyncio
@@ -66,6 +67,14 @@ async def test_get_content_type():
         ("test.css", "text/css"),
         ("test.png", "image/png"),
         ("test.unknown", "application/octet-stream"),
+        ("test.mp3", "audio/mpeg"),
+        ("test.wav", "audio/wav"),
+        ("test.opus", "audio/opus"),
+        ("test.flac", "audio/flac"),
+        ("test.aac", "audio/aac"),
+        ("test.ogg", "audio/ogg"),
+        ("test.m4a", "audio/mp4"),
+        ("test.pcm", "audio/pcm"),
     ]
 
     for filename, expected in test_cases:
