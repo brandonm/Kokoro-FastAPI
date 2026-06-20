@@ -53,12 +53,18 @@ jobs:
             type=sha,prefix=
             type=raw,value=latest
 
+      # Blackwell-only build: cu128 torch wheels (sm_120) on a CUDA 12.8 base.
+      # Covers the RTX 50-series (5090, 5060 Ti, ...). Older cards (sm_50..sm_90)
+      # are intentionally not built here.
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/gpu/Dockerfile.optimized
           push: true
+          build-args: |
+            GPU_EXTRA=gpu-cu128
+            CUDA_VERSION=12.8.1
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
