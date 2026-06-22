@@ -124,10 +124,24 @@ app = FastAPI(
 
 # Add CORS middleware if enabled
 if settings.cors_enabled:
+    allow_credentials = settings.cors_allow_credentials
+    # The CORS spec forbids combining a "*" origin with credentials; browsers
+    # respond with "CORS Missing Allow Origin". If credentials are requested but
+    # origins are still wildcard, degrade to wildcard-without-credentials (which
+    # works) rather than emit an invalid header pair that silently breaks clients.
+    if allow_credentials and "*" in settings.cors_origins:
+        logger.warning(
+            "CORS: allow_credentials is incompatible with wildcard origins. "
+            "Set CORS_ORIGINS to explicit origins (e.g. "
+            "CORS_ORIGINS=https://ui.example.com,http://localhost:5173). "
+            "Disabling credentials for this run."
+        )
+        allow_credentials = False
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )

@@ -3,9 +3,11 @@ from importlib.metadata import (
     version as _pkg_version,
 )
 from pathlib import Path
+from typing import Annotated
 
 import torch
-from pydantic_settings import BaseSettings
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode
 
 
 def _read_version() -> str:
@@ -74,8 +76,29 @@ class Settings(BaseSettings):
     # Web Player Settings
     enable_web_player: bool = True  # Whether to serve the web player UI
     web_player_path: str = "web"  # Path to web player static files
-    cors_origins: list[str] = ["*"]  # CORS origins for web player
+    # CORS origins allowed to call the API from a browser. Default "*" works
+    # only when cors_allow_credentials is False (the wildcard+credentials combo
+    # is forbidden by the CORS spec). NoDecode lets us accept a friendly
+    # comma-separated string (CORS_ORIGINS=https://a.com,http://b:5173) in
+    # addition to a JSON list, rather than pydantic's default JSON-only parsing.
+    cors_origins: Annotated[list[str], NoDecode] = ["*"]
     cors_enabled: bool = True  # Whether to enable CORS
+    cors_allow_credentials: bool = (
+        True  # Send Access-Control-Allow-Credentials. Requires explicit origins (not "*").
+    )
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v):
+        """Accept a comma-separated string or a JSON/list value for CORS_ORIGINS."""
+        if isinstance(v, str):
+            s = v.strip()
+            if s.startswith("["):  # JSON list form, let pydantic handle it
+                import json
+
+                return json.loads(s)
+            return [o.strip() for o in s.split(",") if o.strip()]
+        return v
 
     # Temp File Settings for WEB Ui
     temp_file_dir: str = "api/temp_files"  # Directory for temporary audio files (relative to project root)
