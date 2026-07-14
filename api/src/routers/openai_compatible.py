@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+from contextlib import aclosing
 from typing import AsyncGenerator, Dict, List, Tuple, Union
 from urllib import response
 
@@ -145,26 +146,33 @@ async def stream_audio_chunks(
         unique_properties["return_timestamps"] = request.return_timestamps
 
     try:
-        async for chunk_data in tts_service.generate_audio_stream(
-            text=request.input,
-            voice=voice_name,
-            writer=writer,
-            speed=request.speed,
-            output_format=request.response_format,
-            lang_code=request.lang_code,
-            volume_multiplier=request.volume_multiplier,
-            normalization_options=request.normalization_options,
-            return_timestamps=unique_properties["return_timestamps"],
-        ):
-            # Check if client is still connected
-            is_disconnected = client_request.is_disconnected
-            if callable(is_disconnected):
-                is_disconnected = await is_disconnected()
-            if is_disconnected:
-                logger.info("Client disconnected, stopping audio generation")
-                break
+        # aclosing() so that breaking out below (or the caller abandoning us)
+        # closes the generator chain right here. That chain owns the inference
+        # worker's pipe, and it must drain the request it walked away from
+        # before another request is allowed to read from that pipe.
+        async with aclosing(
+            tts_service.generate_audio_stream(
+                text=request.input,
+                voice=voice_name,
+                writer=writer,
+                speed=request.speed,
+                output_format=request.response_format,
+                lang_code=request.lang_code,
+                volume_multiplier=request.volume_multiplier,
+                normalization_options=request.normalization_options,
+                return_timestamps=unique_properties["return_timestamps"],
+            )
+        ) as audio_stream:
+            async for chunk_data in audio_stream:
+                # Check if client is still connected
+                is_disconnected = client_request.is_disconnected
+                if callable(is_disconnected):
+                    is_disconnected = await is_disconnected()
+                if is_disconnected:
+                    logger.info("Client disconnected, stopping audio generation")
+                    break
 
-            yield chunk_data
+                yield chunk_data
     except Exception as e:
         logger.error(f"Error in audio streaming: {str(e)}")
         # Let the exception propagate to trigger cleanup

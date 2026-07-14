@@ -6,14 +6,26 @@ the ~400-500 MB CUDA runtime resident.
 
 Protocol (over multiprocessing.Pipe connection):
     Parent → Child:
-        ("generate", text, voice_name, voice_path, speed, lang_code, return_timestamps)
+        ("generate", req_id, text, voice_name, voice_path, speed, lang_code, return_timestamps)
         None  → shutdown
 
     Child → Parent:
         ("ready",)
-        ("chunk", audio_ndarray, timestamps_or_none)
-        ("done",)
-        ("error", message)
+        ("chunk", req_id, audio_ndarray, timestamps_or_none)
+        ("done", req_id)
+        ("error", req_id, message)
+
+Every reply carries the req_id it belongs to, and every generation ends with
+exactly one terminator ("done" or "error").  A generation streams an unbounded
+number of chunks, so a parent that stops reading early — the client barged in
+and hung up — would otherwise leave the tail of that generation queued in the
+pipe, where the *next* request would read it as its own audio.  Tagging replies
+lets the parent recognise and discard leftovers instead of playing them.
+
+`cancel_id` is a shared multiprocessing.Value holding the req_id the parent has
+given up on.  The worker checks it between chunks and ends that generation
+early, so an abandoned request can be drained promptly rather than after the
+whole utterance has been synthesised.
 """
 
 import gc
@@ -27,6 +39,7 @@ def worker_entry(
     model_path: str,
     config_path: str,
     device: str,
+    cancel_id=None,
 ):
     """Subprocess entry point. Loads model, handles requests, exits on shutdown."""
     import torch
@@ -65,12 +78,17 @@ def worker_entry(
 
             cmd = msg[0]
             if cmd == "generate":
-                _handle_generate(conn, msg, model, device, pipelines, logger)
+                _handle_generate(
+                    conn, msg, model, device, pipelines, logger, cancel_id
+                )
 
     except Exception as e:
         logger.error(f"[Worker PID {os.getpid()}] Fatal error: {e}", exc_info=True)
         try:
-            conn.send(("error", f"Worker fatal: {e}"))
+            # req_id 0 is never issued, so the parent discards this rather than
+            # mistaking it for a reply to whatever it is currently awaiting; the
+            # pipe closing right after is what actually surfaces the failure.
+            conn.send(("error", 0, f"Worker fatal: {e}"))
         except Exception as send_err:
             logger.error(
                 f"[Worker PID {os.getpid()}] Could not send error to parent: {send_err}"
@@ -100,15 +118,29 @@ def KModel_load(config_path: str, model_path: str, device: str):
     return model
 
 
-def _handle_generate(conn, msg, model, device, pipelines, logger):
-    """Process a single generate request."""
+def _handle_generate(conn, msg, model, device, pipelines, logger, cancel_id=None):
+    """Process a single generate request.
+
+    Always terminated by exactly one ("done", req_id) or ("error", req_id, ...),
+    including when the parent cancels — the parent relies on that terminator to
+    know the pipe is clean again.
+    """
     import os
     import tempfile
 
     import torch
     from kokoro import KPipeline
 
-    _, text, voice_name, voice_path, speed, lang_code, return_timestamps = msg
+    (
+        _,
+        req_id,
+        text,
+        voice_name,
+        voice_path,
+        speed,
+        lang_code,
+        return_timestamps,
+    ) = msg
     try:
         # Device-mapped voice loading (mirrors KokoroV1.generate)
         voice_tensor = torch.load(
@@ -128,6 +160,11 @@ def _handle_generate(conn, msg, model, device, pipelines, logger):
         for result in pipelines[lang_code](
             text, voice=tmp, speed=speed, model=model
         ):
+            if cancel_id is not None and cancel_id.value == req_id:
+                logger.info(
+                    f"[Worker] request {req_id} cancelled by parent, stopping early"
+                )
+                break
             if result.audio is None:
                 continue
             timestamps = None
@@ -151,12 +188,12 @@ def _handle_generate(conn, msg, model, device, pipelines, logger):
                     and t.text
                     and t.text.strip()
                 ]
-            conn.send(("chunk", result.audio.numpy(), timestamps))
+            conn.send(("chunk", req_id, result.audio.numpy(), timestamps))
 
-        conn.send(("done",))
+        conn.send(("done", req_id))
     except Exception as e:
         logger.error(f"[Worker] generate failed: {e}", exc_info=True)
         try:
-            conn.send(("error", str(e)))
+            conn.send(("error", req_id, str(e)))
         except Exception:
             pass
