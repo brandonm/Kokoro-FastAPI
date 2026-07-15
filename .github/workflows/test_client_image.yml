@@ -41,7 +41,7 @@ jobs:
       contents: read
     env:
       REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
-      OWNER: ${{ vars.OWNER || 'remsky' }}
+      OWNER: ${{ github.repository_owner }}
       IMAGE_NAME: ${{ vars.TEST_CLIENT_IMAGE_NAME || 'tts-api-test-client' }}
     steps:
       - uses: actions/checkout@v5
